@@ -1,0 +1,601 @@
+---
+word_document: default
+author: "Philipp Ahrens"
+date: "January 9, 2018"
+output:
+ pdf_document: default
+ html_document: default
+ word_document: default
+title: "Dynamics and Performance of an IT Call Center"
+html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+Use this R Markdown document for the Final Data Exploration Project. 
+During the course, all work on the project should be included in this document. Actively add, move, and remove text and R code in this document. The document's history should reflect your work.
+At the end of the course, this document should create the report that you submit as a PDF or Word document.
+
+```{r data import}
+library(tidyverse)
+library(forcats) ##used for categorical variables
+library(lubridate)
+library(texreg)
+
+
+#import data 
+Transactions <- read_csv("Transactions.csv")
+Badge.Assignment <- read.csv("BadgeAssignment.csv")
+IR <- read.csv("IR.csv.bz2")
+Zigbee <- read.csv("Zigbee.csv.bz2")
+Location <- read.csv("LocationTrackingEvery1Minute.csv.bz2")
+
+
+```
+
+
+## Introduction
+The dataset "Dynamics and Performance of an IT Call Center" contains five tables with information related to the perferomance, behaviour and interpersonal interactions of the employees of a data server configuration firm, collected over the duration of one month. Performance related data includes assigning time, closing time, degree of diffulty (basic, complex & advanced), assigned-to, closed-by and number of follow-ups of each completed task in the one month period. Behaviour related data includes the estimated locations/movement of the employees, which is tracked through tracable badges assigned to each employee. Badge related data includes unique ID's of the badge, assigned location and role. Interaction data includes information indicating face-to-face communications with a specific dat and time stamp. This report mainly uses the badge, performance and behvaiour related data to present significant relationships between variables. 
+
+Within the original study, 36 of the 51 employees participated, each receiving their own unique Badge ID. Whereas, non participating employees were labelled with a "N" in the original data.  
+This study aims to research the differences in physical and work behaviours of employees. Additionally, it would be interesting to investigate wheteher there is a difference in the role or position (manager/worker) when analyzing the employees behaviour.
+
+
+##__Wrangling data__
+
+```{r}
+
+#Badge Assignment
+new.badge <- Badge.Assignment[grep("[[:digit:]]", Badge.Assignment$BID), ] %>% #removed invalid Badge ID's
+filter(!role %in% c("RSSI", "Base station")) %>%
+filter(BID!=103)# Fake
+
+#IR
+new.IR <- IR %>% #removed all invalid sender ID's
+filter(!sender.id %in% c("N", "-")) %>%
+filter(!sender.id == "0")
+
+#Transactions
+Transactions <- Transactions %>% #reordering factor (Basic = 1st)
+mutate(complexity = fct_relevel(complexity, "Basic"))
+Transactions %>% count(complexity)
+new.transactions <- filter(Transactions, !grepl ("N", assigned.to)) ##removing assignments from employees that didn't participate in the study
+new.transactions <- filter(new.transactions, !grepl ("N", closed.by))
+new.transactions <- filter(new.transactions, duration > 0)
+
+#Location
+Location <- Location %>%
+filter(id!=269,298) #not in the floorplan 
+
+```
+The first step undertaken involves the wrangling of the data of the tables used in this research project. For the badge data table, all invalid Badge ID's (N) and one fake ID were removed. Finally, all badges assigned to "RSSI" and "Base Station" were also filtered out as they do not represent any employee. Similarly, for the interaction data table, all invalid send ID's have been removed. With regards to the transactions table, employees who did not participate in the study were removed as well as specific transactions that had a negative duration. Moreover, the factor of task complexity was reordered, making "Basic" the first level. Finally, concerning the location data table, ID's that were not displayed on the floorplan were removed.
+
+
+__Adding manager/worker label__ 
+
+```{r}
+new.badge <- new.badge %>%
+mutate(position = factor(x=BID)) %>% 
+mutate(position = 
+ factor(
+   ifelse(position == 266, "Manager",
+   ifelse(position == 276, "Manager",
+   ifelse(position == 291, "Manager",
+   ifelse(position == 106, "Manager", "Worker")))),
+   labels = c("Manager", "Worker"), ordered = FALSE))
+
+
+new.location <-Location %>%
+mutate(position = factor(x = id)) %>% 
+mutate(position = 
+ factor(
+   ifelse(position == 266, "Manager",
+   ifelse(position == 276, "Manager",
+   ifelse(position == 291, "Manager",
+   ifelse(position == 106, "Manager", "Worker")))),
+   labels = c("Manager", "Worker"), ordered = FALSE))
+```
+The following step involved creating a new factored variable representing the position (Manager/Worker) of the employee. The distinct positions will be used at a later stage in this project when analyzing the data.
+
+__Creating weekday__ 
+
+```{r}
+new.transactions <- new.transactions %>%
+mutate(day.assigned = wday(assign.date, label=TRUE)) %>%
+mutate(day.assigned=factor(day.assigned, ordered = FALSE))
+new.transactions <- filter(new.transactions, !grepl ("Sun",day.assigned)) #ignore sun
+new.transactions <- filter(new.transactions, !grepl ("Sat",day.assigned)) #ignore sat
+count(new.transactions, day.assigned)
+```
+The original data set provided a specific date and time for each assigned transaction. Based on this date/time stamp, a new factored variable was created, containing the day of the week on which the transaction was assigned.
+
+__Checking Keys__
+
+```{r}
+
+
+#Key_Check1 <- function(data, x) {if((sum(is.na(data[,x])))==0){1} else {0}} #Returns 1 no NAs and if it returns 0 NAs
+
+#Key_Check2 <- function(data, x) {if((sum(duplicated(data[,x])))==0){1} else {0}} #Returns 1 if no duplicates and returns 0 if 
+
+Key_Check <- function(data, x) {if((sum(is.na(data[,x])))==0){if((sum(duplicated(data[,x])))==0){"True"} else {"False"}} else {"False"}}
+
+Key_Check(Location, "time")
+
+```
+
+In the above chunk two functions are created; "Key_Check1" and "Key_Check2". Key_Check1 checks for NAs (Result of 1 indicats there are no NAs and a result of 0 indicates there are) while Key_Check2 (Result of 1 indicats there are no duplicates and a result of 0 indicates there are) checks for any duplicate values. However, both of these functions can be combined into one function "Key_Check" which returns "True" if it is a primary key and "False" if it is not. The Key_Check function will be applied to the data sets to check for primrary keys. 
+
+
+
+```{r}
+#Location
+Key_Check(new.location, "time") #Result = False
+
+#Zigbee
+Key_Check(Zigbee, "date.time") #Result = False
+
+#Badge Assignment
+Key_Check(new.badge, "BID") #Result = True
+
+#IR
+Key_Check(new.IR, "date.time") #Result = False
+
+#Transactions
+Key_Check(new.transactions, "assign.date") #Result = False
+Key_Check(new.transactions, "close.date")  #Result = False
+
+```
+
+Only the data set new.badge contains a primary key. A surrogate key will have to be used for the other data sets. A surrogate key is a combination of the two other column variables to create a unique key. Following this, surrogate keys will be created in an attempt to join the data. 
+
+##__joining data__
+
+```{r}
+Zigbee$surrogate <- paste(Zigbee$sender.id, Zigbee$date.time)
+new.location$surrogate <- paste(new.location$id, new.location$time)
+new.transactions$surrogate <- paste(new.transactions$assigned.to, new.transactions$assign.date)
+new.IR$surrogate <-  paste(new.IR$sender.id, new.IR$date.time)
+```
+
+In the above code surrogate keys are created for Zigbee, Location, Transactions and IR. In each case a combination of an employ id and data/time variable will be used. 
+
+```{r}
+Key_Check(Zigbee, "surrogate") #False
+Key_Check(new.location, "surrogate") #False
+Key_Check(new.transactions, "surrogate") #False
+Key_Check(new.IR, "surrogate" ) #False
+```
+
+However, unforunatley even this proves to be futile and none of the surrogate keys are also primrary keys. Therefore, in an attempt to joing the data sets duplicate surrogate keys will be removed. To begin with, location and zigbee will be joined by the surrogate key.
+
+
+```{r}
+location.edit <- filter(new.location, !duplicated(surrogate)) #removing duplicates
+zigbee.edit2 <- filter(Zigbee, !duplicated(surrogate)) #removing duplicates
+Key_Check(location.edit, "surrogate") #=True
+Key_Check(zigbee.edit2, "surrogate")  #=True
+zigbee.location <- zigbee.edit2 %>%
+left_join(location.edit, by = "surrogate")
+head(zigbee.location)
+sum(!is.na(zigbee.location$x)) #=638 not really meanigul
+
+```
+
+However, this does not lead to a data set with meaningul results as only 638 of lines does not contain any NAs. Therefore, no analysis will be applied to this data set. Next, the transactions and location data sets will be joined.
+
+```{r}
+transactions.edit <- filter(new.transactions, !duplicated(surrogate)) #removing duplicates
+Key_Check(location.edit, "surrogate") #=True
+Key_Check(transactions.edit, "surrogate") #=True
+location.transactions <- location.edit %>%
+left_join(transactions.edit, by = "surrogate")
+sum(!is.na(location.transactions$assigned.to)) #=246 not really meaningful
+transactions.location <- transactions.edit %>%
+left_join(location.edit, by = "surrogate")
+sum(!is.na(location.transactions$assigned.to)) #=246 not really meaningful
+
+```
+
+Similarly, the joining leads to mulitples Nas. Both of the data sets created only contain 240 lines without NAs. Once again no analysis will be applied to this data sets. In an attempt to create a new data set that does not contain mainly lines contain NAs, zigbbe and IR will be joined using date.time
+
+```{r}
+Zigbee$key <- paste(Zigbee$date.time) #Pasting values so they can merge
+new.IR$key <- paste(new.IR$date.time) #Pasting values so they can merge
+IR.edit <- filter(new.IR, !duplicated(date.time)) #Filtering duplicates
+zigbee.edit <- filter(Zigbee, !duplicated(date.time)) #Filtering duplicates
+Key_Check(IR.edit, "key") #Result = True
+Key_Check(zigbee.edit, "key") #Result = True
+zigbee.IR <- IR.edit %>% #Joinging
+left_join(zigbee.edit, by = "key") %>%
+subset(select=-c(key,date.time.y, surrogate.x, surrogate.y)) #Removing unnecessary columns
+head(zigbee.IR)
+```
+
+Finally, a data set has been created where the majority of the lines does not contains NAs. There is potential to apply analysis to this to get a greater understanding of the the employees movemenet in the office overall. However, this still does not lend great insight into the habits of the call centre workers. 
+
+In a new approach to create a combined data set that divulges meaningful insight into the work habits of the call centre employees, the average location of each employee within the location data set is computed (x cooridinate and y coordinate) and are stored in a new data set. This is combined with the new.badge data set which denotes the location of the desks of each of the employes and it also denotes the role and position . Note new.badge was the only data set with a primary key and the id of each employee in the new data set should be a primary key (this will be checked). 
+
+
+
+```{r}
+avg.location <- new.location %>%
+group_by(id) %>%
+summarise(mean_x=mean(x), mean_y=mean(y)) %>%
+ rename(BID=id) %>%
+ mutate(BID = factor(BID))
+Key_Check(avg.location, "BID") #True
+badge.location <- new.badge %>% 
+left_join(avg.location, by = "BID")
+head(badge.location)
+
+```
+
+The above newly created data set badge.location contains the coordinates of the employess desk, the employees role, the employes position and coordinates of where they spent most of their time on average. Analysis will be applied to this data set to get a greater understanding of the employees movements. However, this data set can be improved further.
+
+```{r}
+badge.location <- badge.location %>%
+ mutate(x.diff= x - mean_x, y.diff = y - mean_y) %>%
+ mutate(total.diff = sqrt(x.diff^2 + y.diff^2))
+```
+
+To accurately calculate the difference between the assigned working space of each employee and their average location in the office, pythagoras theorom was used. This gives the distance the between the assigned working space of each employee and their average location in the office. This extra piece of information can be used to improve the analysis of the workers movements.
+
+
+```{r}
+new.transactions %>% group_by(complexity, role) %>%
+summarise(count = n()) %>% #cell frequencies!
+spread(key = role, value = count, fill = 0)
+```
+
+Above is the crosstabulation of complexity vs role with in the transactions file. The majority of basic taks were pricing while the majority of advanced taks were configurations and the complex tasks were pretty evenly distributed.
+
+
+```{r}
+new.transactions %>% group_by(assigned.to, closed.by) %>%
+summarise(count = n()) %>% #cell frequencies!
+spread(key = closed.by, value = count, fill = 0)
+
+
+```
+
+A matrix was created to investigate if many of the taks assigned to an employ were closed by a different employ. Any transactions not a long the centre diagonal was closed by a different employee who it was assigned to. Almost all transactions were closed by the employee it was assigned to. Therefore, going forward with the analysis we will only look on an assigned to level. 
+
+
+##Transaction plots
+
+
+```{r}
+Transactions.plot <- new.transactions%>%
+group_by(assigned.to) %>%
+summarise(mean=mean(duration)) %>%
+mutate(role = factor(x = assigned.to)) %>% #Need to make sure this is correct
+ mutate(role = 
+ factor(
+   ifelse(role == 293, "Pricing",
+   ifelse(role == 297, "Pricing",
+   ifelse(role == 268, "Pricing",
+   ifelse(role == 272, "Pricing",       
+   ifelse(role == 288, "Pricing",
+   ifelse(role == 263, "Pricing",       
+   ifelse(role == 266, "Pricing", "Configuration")))))))))
+
+   #labels = c("Pricing", "Configuration"), ordered = TRUE))))
+
+ggplot(data=Transactions.plot) + geom_bar(mapping=aes(x=assigned.to, y=mean, fill=role), stat = "identity")+ 
+ labs (title = "Average Duration of Transactions per Employee", x = "Badge.ID", y = "Average Duration in Minutes")+ 
+ theme_minimal (base_size = 9)
+
+
+
+```
+The bar graph shows the average duration per transaction divided the pricing and configuration. ALthough one outlier, caused by one individual for configuaration tasks, is included, we can conclude that pricing tasks require more time for completion than configuration tasks. An large variation between all employees can be seen, even across the different roles. 
+
+
+```{r}
+Transplot <- new.transactions %>%
+group_by(complexity) %>%
+summarise(count_comp=n())
+ggplot(data=Transplot) + geom_bar(mapping=aes(x=complexity, y = count_comp, fill = complexity), stat = "identity") + 
+ theme_minimal (base_size = 10) +  labs (title = "Transactions per Complexity", x = "Complexity", y = "Number of transactions")
+
+
+```
+
+
+```{r}
+
+
+ggplot(data = new.transactions) + 
+
+
+geom_bar(mapping = aes(x = role, fill = complexity), position = "dodge") + 
+
+labs (title = "Complexity per Role", x = "Complexity", y = "Number of transactions") +
+
+ theme_minimal (base_size = 10)
+
+
+```
+
+
+The bar chart shows the overall distribution of task complexities between the departments pricing and configuration. While pricing contains mostly basic and a few complex tasks, configuration tasks are more equally distributed over the different complexities. We can assume, that the high amount of basic tasks lead to more transactions and less follow-ups for the pricing department. On the other hand, configuration tasks are expected to require more follow-ups due to the high share of advanced and complex tasks.
+
+
+
+
+
+```{r}
+
+Transactions_plot2 <- new.transactions%>% 
+group_by(complexity)%>%
+summarise(mean=mean(duration))
+ggplot(data=Transactions_plot2) + geom_bar(mapping=aes(x=complexity, y=mean, fill = complexity), stat = "identity") + 
+ labs (title = "Average Duration per Complexity", x = "Complexity", y = "Duration in Minutes")+
+ theme_minimal (base_size = 10)
+```
+The graph indicates that complex tasks require significantly more time for completion than basic and advanced tasks. This is allign with the assumption that complex tasks contain more sophisticated and deliberative processes, while basic tasks are simple and fairly easy to solve. Suprisingly the basic and advanced tasks differ only slightly in the average time, because advanced tasks were expected to take more time than the basic ones.
+```{r}
+Transactions_plot3 <- new.transactions%>%
+group_by(assigned.to)%>%
+summarise(mean=mean(n.follow.ups)) %>%
+mutate(role = factor(x = assigned.to)) %>% #Need to make sure this is correct
+ mutate(role = 
+ factor(
+   ifelse(role == 293, "Pricing",
+   ifelse(role == 297, "Pricing",
+   ifelse(role == 268, "Pricing",
+   ifelse(role == 272, "Pricing",       
+   ifelse(role == 288, "Pricing",
+   ifelse(role == 263, "Pricing",
+   ifelse(role == 266, "Pricing", "Configuration")))))))))
+
+
+ggplot(data=Transactions_plot3) + geom_bar(mapping=aes(x=assigned.to, y=mean, fill=role), stat = "identity") +   
+ labs (title = "Average nr of Follow-ups per Employee", x = "Badge.ID", y = "Mean Follow-ups")+
+ theme_minimal (base_size = 9)
+
+
+ggplot(data=new.transactions, aes(x = assigned.to, y=n.follow.ups, fill=role)) + geom_bar(stat = "identity") + 
+ labs (title = "Number of Follow-ups per Employee", x = "Badge.ID", y = "Follow-ups")+
+ theme_minimal (base_size = 9)
+
+```
+The two graphs above display the data concerning the follow ups per employee. The first chart shows the average number of follow ups per employee per transaction, while the second graph shows the total count of follow ups per employee. A high number of follow ups suggests that the tasks of the employee required a lot of additional interaction with the client or third parties, in order to complete the task. It can be assumed that a low number follow ups equals a good performance by the employee, while many follow ups indicate an insufficient performance.
+
+```{r}
+Transactions_plot4 <- new.transactions%>% 
+group_by(role)%>%
+summarise(mean=mean(duration))
+ggplot(data=Transactions_plot4) + geom_bar(mapping=aes(x=role, y=mean, fill = role), stat = "identity")+ 
+ labs (title = "Average Duration per Role", x = "Role", y = "Duration in Minutes")+ 
+ theme_minimal (base_size = 10)
+
+```
+According to the graph we can conclude, that in average the pricing tasks require almost twice as much time as the configuration tasks. This could due to the fact, that pricing tasks require more interaction and discussion with third parties, while configuration tasks are less depending on external factors. Much interaction and dependency on others probably then leads to increased delays and waiting times until the transaction can be completed.
+
+
+## T-test
+
+```{r}
+
+options (digits = 3)
+
+test <- new.transactions %>% select (n.follow.ups, role)
+
+result_var <- var.test(n.follow.ups ~ role, data = test)
+
+result_ttest <- t.test(n.follow.ups ~ role, data = test,
+                     alternative = "two.sided",
+                     mu = 0,
+                     paired = FALSE,
+                     var.equal = (result_var$p.value > 0.05), 
+                     conf.level = 0.95)
+
+result_ttest
+
+ggplot (test, aes (role, n.follow.ups)) + geom_boxplot() + 
+labs (title = "Difference Follow-ups between Pricing and Configuration", x = "Role", y = "Number of follow-ups") +
+ theme_minimal (base_size = 10)
+
+
+```
+
+The T-test should examine, whether an significant difference between the number of follow-ups conducted by the configuration and pricing department is present. The variable "role" determines whether an individual belongs to the configuration or pricing department of the IT-center, while "n.follow.ups" contains the amount of follow-ups for each task completed during the one-month period. The "n.follow.ups" got measured on interval/ratio level and therefore, can be used to as dependent variable for the T-test.
+The analysis revealed an significant difference between the two roles for the number of follow-ups. With m = 6.61 employees from the pricing department have to conduct a significantly lower number of follow-ups than employees from the configuration department (m = 3.24). The difference is significant, p < 0.05. This indicates that tasks for configuration are rather complicated and therefore, require more attention as well as interaction with the customer. On the other side, pricing tasks are less likely to entail a lot of additional involvement by the employees. Future efforts should aim for improving the processes of configuration tasks, in order to spend less money and time on follow-up tasks.
+
+Transactions_bar_closed.by
+```{r}
+
+new.transactions 
+
+ggplot (data = new.transactions, mapping = aes (x = assigned.to, fill = complexity)) + geom_bar () + 
+labs (title = "Transactions per Employee", x = "Badge.ID", y = "Number of transactions") + 
+theme_minimal (base_size = 10) 
+
+
+```
+The chart above shows the number of transactions and the respective difficulty per employee. Interestingly, only one manager ID has been identified within all transactions. As clearly displayed in the chart, the number of transactions per employee are not evenly distributed.
+
+```{r}
+ggplot(data = new.transactions) + 
+geom_bar(mapping = aes(x = role, fill = complexity), position = "dodge") + 
+labs (title = "Complexity per Role", x = "Complexity", y = "Number of transactions") +
+ theme_minimal (base_size = 10)
+
+
+```
+The bar chart shows the overall distribution of task complexities between the departments pricing and configuration. While pricing contains mostly basic and a few complex tasks, configuration tasks are more equally distributed over the different complexities. We can assume, that the high amount of basic tasks lead to more transactions and less follow-ups for the pricing department. On the other hand, configuration tasks are expected to require more follow-ups due to the high share of advanced and complex tasks.
+```{r}
+ggplot(data = new.transactions) + 
+geom_bar(mapping = aes(x = day.assigned, fill = complexity), position = "dodge") + 
+labs (title = "Complexity per Weekday", x = "Weekday", y = "Number of transactions") + 
+ theme_minimal (base_size = 10)
+```
+The barchart above illustrates the the number of assigned tasks per day including the three levels of diffulty. Interestingly, one can see that as the week progresses, the number of assigned tasks decreases. At a later stage, this report will statistically analyze these results to determine whether any correlation can be determined. 
+
+
+```{r}
+
+ggplot(data = badge.location, aes(x=x, y=y, color=position)) + geom_point() + geom_text(aes(label=BID), vjust = 2.0, color="black", size=2.0) + labs(title = "Assigned workstation per employee", x = "Longitude", y = "Latitude") + theme_minimal(base_size = 10)
+
+ggplot(data = badge.location, aes(x=mean_x, y=mean_y, color=role)) + geom_point() + geom_text(aes(label=BID), vjust = 2.0, color="black", size=2.0) + labs(title = "Average position per employee", x = "Longitude", y = "Latitude") + theme_minimal(base_size = 10)
+
+```
+
+The former graph shows the assigned working place for each employee according to the floor plan. The shown badge.IDs are distinguished between workers and the managers. In the second graph, the average of all positions for each employee were calculated in order to show in where they spend most of the time.
+
+```{r}
+
+ggplot(data = badge.location) + geom_point(mapping=aes(x=x, y=y, color=role)) + geom_text(aes(x=x, y=y, label=BID), vjust = 2.0, color="orange2", size=2.0)+ geom_point(mapping=aes(x=mean_x, y=mean_y, color=role))+ geom_text(aes(x=mean_x, y=mean_y, label=BID), vjust = 2.0, color="black", size=2.0) + labs(title = "Average position per employee", x = "Longitude", y = "Latitude") + theme_minimal(base_size = 10)
+
+```
+
+The above graph denotes the positions of each workers base station (ID badges in orange) and the coordinates of their average location (ID bages in black). The legend denotes their work role. The below graph is the same however the legend denotes the workers position (Worker or manager).
+
+```{r}
+ggplot(data = badge.location) + geom_point(mapping=aes(x=x, y=y, color=position)) + geom_text(aes(x=x, y=y, label=BID), vjust = 2.0, color="orange2", size=2.0)+ geom_point(mapping=aes(x=mean_x, y=mean_y, color=position))+ geom_text(aes(x=mean_x, y=mean_y, label=BID), vjust = 2.0, color="black", size=2.0) + labs(title = "Average position per employee", x = "Longitude", y = "Latitude") + theme_minimal(base_size = 10)
+```
+
+
+Both graphs give a good insight into the movements of the workers. However, it is hard to decipher each workers average position was in relation to their work station. To get a better idea, a graph of the newly created "total.diff" (denoting distance between work station and average position) is computed:
+
+```{r}
+ggplot(data=badge.location, aes(total.diff, fct_reorder(BID,total.diff))) + geom_point(mapping=aes(colour=role)) + labs(title = "Distance between workstation and average position per employee", x = "Total Distance", y = "Badge ID") + theme_minimal(base_size = 9)
+```
+
+The graph shows the total distance in centimeters for each employee between the assigned and the calculated average position. The badge.IDs are splitted by role, in order to show the differences between configuration, coordinator and pricing.
+This gives a better insight into the workers movements. Worker 297's average postion was the furtherst away from his work station, being over 3000 cm away from his work station. While, work 291 average position was extremely close to his work station. Furthemore, the average position of the coordinators tended to be rather close to their work stations. On the other hand, the average position of those working in pricing tended to be further away from their work station. A similar graph is created below, with the legend denoting the workers position (Manager or Worker).
+
+```{r}
+ggplot(data=badge.location, aes(total.diff, fct_reorder(BID,total.diff))) + geom_point(mapping=aes(colour=position)) + labs(title = "Distance between workstation and average position per employee", x = "Total Distance", y = "Badge ID") + theme_minimal(base_size = 9)
+```
+The graph shows the total distance in centimeters for each employee between the assigned and the calculated average position. The badge.IDs are splitted by position, in order to show the differences between managers and workers.
+This produces some interesting results. Only manager is with in the 20 people whose average position was furthest away from their work station. For, the most part workers tended to spend more time away from their desks. These results are interesting, however, to gain a greater understanding of the employess performance this must be related to the transactions data set. To do this, two new data sets must be created. One containg the mean duration the workers task, the mean number of follow ups of the workers taks and number of tasks completed by the worker. This data set will then be combined with the previously created data set "badge.location". This is completed below:
+
+```{r}
+transactions.edit2 <- new.transactions%>%
+group_by(assigned.to) %>%
+summarise(mean.duration=mean(duration), mean.follow.ups = mean(n.follow.ups), n.transactions=n()) %>%
+rename(BID=assigned.to)
+Key_Check(transactions.edit2, "BID")
+
+transactions.badge.location <- badge.location %>%
+left_join(transactions.edit2, by = "BID")
+
+head(transactions.badge.location)
+
+```
+
+Now within one data set, there is information from three of the orginal data sets. This can be used to investigate the relation between workers movements and their transactions. In the "README" file it is hypothesied that "we would expect a positive correlation between the rate of problem-solving by an employee and the number of places visited by that employee". Using this data set the correlation between the distance between average postion and the work station positon and the number of transaction complteted can be computed for each employee.
+
+```{r}
+transactions.badge.location.0 <-transactions.badge.location %>%
+ filter(role!="Coordinator") #does not conduct transaction tasks
+transactions.badge.location.0$n.transactions[is.na(transactions.badge.location.0$n.transactions)] <- 0
+
+cor(transactions.badge.location$n.transactions, transactions.badge.location$total.diff) #=.29
+
+
+```
+
+There is a positive correlation of 0.29. Although not exactly investigating what was hypotised in the "README" file it is along the same lines. It appears that works whose average position was further away from their actual work station completed more transaction. 
+
+During the course function used to calculate the correlation between two variables in a data frame data for each category of a factor category was presented. This can be used to investigate the correlation between number of transactions and total distance between different roles:
+
+```{r}
+# Function to calculate the correlation between variables x and y in data frame data for each category of a factor cat.
+partcorr <- function(data, cat, x, y) {
+ corrs <- list()
+ for(i in levels(data[,cat])) {
+   corrs[i] <- round(cor(data[data[,cat] == i, x], data[data[,cat] == i, y], method = "pearson"), digits = 2)
+ }
+ return(corrs)
+} 
+
+partcorr(transactions.badge.location.0, "role", "n.transactions", "total.diff")
+
+```
+
+The above results are not what was expected. There is a relatively strong linear dependence between number of transactions and total distance (.59). However, there is actually a negative linear dependence for thos working in Configuration. This suggests that for those worker in pricing it is beneficial to spend a lot of the workday away from their desks but that the opposite is true for those working in configuration, they should spend more time close to their desks. Below the correlation between total distance and mean transaction duration/numner of follow ups:
+
+```{r}
+round(cor(transactions.badge.location.0$mean.duration, transactions.badge.location.0$total.diff, use="complete.obs"),2)
+round(cor(transactions.badge.location.0$mean.follow.ups, transactions.badge.location.0$total.diff, use="complete.obs"),2)
+
+
+```
+
+There is basically no correlation between mean duration and total distance (0.08). However, there is a relitivaly strong negative dependence between mean number of follow ups and total distance (-.46)
+
+##Linear Regression
+
+The final step of the project is to conduct linear regression. First, a regression is computed to predict duration of transactions.
+
+```{r}
+model_day <-  lm(duration ~ role + complexity + day.assigned, data=new.transactions)
+summary(model_day)
+
+plotreg(model_day,
+custom.coef.names =
+c("Intercept",
+"Pricing" ,"Advanced", "Complex",
+"Tuesday", "Wednesday", "Thursday", "Friday"), custom.model.names = "Predicting Duration",
+omit.coef = "Intercept")
+
+
+```
+
+
+
+In the above regression, the duration if each task is taken to be the independent variable and the role, complexity and newly created variable denoting the day each task was assgined are taken to be the explanatory variables. The reference category for role is configuation, it can be seen that  being a "Pricing" task adds a considerable amount of minutes to the estimated duration. Similarly, "Basic" is taken to be the reference category for complexity, as expected the esimated duration of "Advanced" tasks is higher and the the estimated duration of "Complex" is even higher again. The day assigned variable leads to some interesting results. Monday is the reference category and as all the dummy variables are positive, the estimated duration of asks assigned on a Monday is less than the rest of the week. The dummy variables Tuesday and Wednesday are not significant. However, the dummy variables Thursday and Friday and it can be seen that both add a considerable amount to the esimated duration of the task assigned. This suggests that productivity declines in the latter stages of the week. Another possible reason is taks not solved by Friday evening will not be solved until the next week, adding to the duration. From this regression, the shortest estimated duration is a basic, configuration task assigned on a Monday and the task is estimated to take 10.92 minutes. On the other, longest estimated duration is a complex, pricing task assigned on a Friday and it is estimated to take `r 10.92+1275.13+626.39+804.03`.
+
+
+```{r}
+
+model_2 <-  lm(n.follow.ups ~ role + complexity + day.assigned + duration, data=new.transactions) 
+summary(model_2)
+
+
+plotreg(model_2,
+custom.coef.names =
+c("Intercept",
+"Pricing" ,"Advanced", "Complex",
+"Tuesday", "Wednesday", "Thursday", "Friday", "Duration"), custom.model.names = "Predicting number of follow up",
+omit.coef = "Intercept")
+
+
+```
+
+
+Now, a regression is fitted to the number of follow ups of each task. In can be seen in model_2 that the day assgined has no significant effect on the number of follow ups of the task. Duration is used as an independent variable. It should be noted that number of follow ups was not fitted as an independent variable when investigating the duration of each task. There is a possible causality effect between the duration of the task and the number of follow ups but not visa versa. Interestingly, pricing tasks were estimated to have a longer duration. However, it appears from this regression it is esitmated that they have almost 3 less follow ups. Once again, the advanced and complex tasks have more follow ups than the basic tasks. 
+
+Finally, a linear regression is applied to predict the influences of the number of transactions per employee using the newly data set transactions.badge.location.0.
+
+```{r}
+model_n <- lm(n.transactions ~ total.diff + mean.duration + mean.follow.ups + position + role, data = transactions.badge.location.0  )
+
+
+plotreg(model_n,
+custom.coef.names =
+c("Intercept", "Mean Duration", "Mean no. of follows ups",
+"Total Distance" ,"Worker", "Pricing"), custom.model.names = "Predicting number of transactions",
+omit.coef = "Intercept")
+
+```
+
+As one would expect workers conduct more taks than managers. Those working in the pricing whole complete more tasks per employee. Conversely, total distance does not have a statistically significant effect on number of transactions. This is not what we would expect as there is a positive linear correlation between both variables. 
+
+
+## Conclusion
+
+The most challenging aspect of the data project was joining the data sets. Mulptiple attempts lead to data sets with multiple NAs and no interesting information could be gained. Finanlly, location and badge was joined, which lead to gaining an insight into the workers movements. This was later combined with an augmented transactions data set, where employees movements was linked to productivity. 
+When comparing managers and workers, a few points immediately stand out. Managers tend to delegate almost all of the work and only one manager actually completed a transaction task. Furthermore, on a whole managers spend more time close to their workstation. Similarly, coordinators spent more time close to their workstation. 
+A positive correlation was found between number of transactions completed by employee and the total distance between work station and average position. However, when this correlation was examined on a group basis, there was an even stronger positive correlation for those working in pricing but there was actually a negative correlation for those working in configuraiton. This suggests that those working in pricing should spend more time interacting with other departments to succesfully complete a high number of tasks.
+The t-test results demonstrated that there were less follow ups from pricing transactions. 
+When inspecting the regression results it was found that, productivity decreases towards the end of the week. In addition, pricing transactions take longer but have less follow ups in comparision to configuation transactions. The complexity of a transaction effected the duration and number follow ups as one would expect, complext tasks taking the longest and having the most follow ups. However, a suprising unexpected result is that total distance does not have a statistically significant effect on number of transactions, as our correlation suggested.
+It is evident from our findings that the behaviour of the worker has an effect on productivity. There are multiple factors to consider when examining employee productivity. For one, it can not be said which is more desirable; a transaction with a shorter duration or a transaction with less follow ups. Furthermore, the same behaviour has a different effect between different departments (Pricing vs Configuration). In conclusion, the behaviour of the employee has been related to the employees performance as desired.
